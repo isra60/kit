@@ -1,0 +1,29 @@
+name: run
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: run
+  cancel-in-progress: false
+
+jobs:
+  run:
+    if: github.actor == github.repository_owner
+    runs-on: xcode-27
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Run
+        env:
+          ACCESS: ${{ secrets.ACCESS }}
+          STORE: ${{ secrets.STORE }}
+          DATA: ${{ secrets.DATA }}
+          BUNDLE_SHA: ${{ secrets.BUNDLE_SHA }}
+          PYTHONUNBUFFERED: '1'
+        run: python3 task.py
