@@ -23,14 +23,15 @@ def main():
     env = dict(os.environ, GH_TOKEN=os.environ["ACCESS"], GH_REPO=os.environ["STORE"], TASK_ROOT=str(root))
     tag = "run-" + os.environ["GITHUB_RUN_ID"]
     store_verified = False
+    phase = "access"
     with logfile.open("wb", buffering=0) as log:
         def run(*args, capture=False, check=True):
             return subprocess.run(args, env=env, stdout=subprocess.PIPE if capture else log,
                                   stderr=log, check=check)
 
         def publish():
-            visibility = run("gh", "repo", "view", "--json", "visibility", "--jq", ".visibility", capture=True)
-            if visibility.stdout.strip() != b"PRIVATE":
+            visibility = run("gh", "api", "repos/" + env["STORE"], "--jq", ".private", capture=True)
+            if visibility.stdout.strip() != b"true":
                 return
             snapshot = root / "snapshot" / "details.txt"
             snapshot.parent.mkdir(exist_ok=True)
@@ -38,13 +39,15 @@ def main():
             run("gh", "release", "upload", tag, str(snapshot), "--clobber", check=False)
 
         try:
-            result = run("gh", "repo", "view", "--json", "visibility", "--jq", ".visibility", capture=True)
-            if result.stdout.strip() != b"PRIVATE":
+            result = run("gh", "api", "repos/" + env["STORE"], "--jq", ".private", capture=True)
+            if result.stdout.strip() != b"true":
                 raise RuntimeError("Private storage required")
             store_verified = True
+            phase = "storage"
             exists = run("gh", "release", "view", tag, capture=True, check=False)
             if exists.returncode:
                 run("gh", "release", "create", tag, "--title", "run", "--notes", "Private task state")
+            phase = "configuration"
             run("gh", "release", "download", "config", "--pattern", "bundle.zip", "--dir", str(root))
             package = root / "bundle.zip"
             if hashlib.sha256(package.read_bytes()).hexdigest() != env["BUNDLE_SHA"]:
@@ -55,6 +58,7 @@ def main():
                     if not target.is_relative_to(root.resolve()) or entry.filename.startswith(("/", "\\")):
                         raise RuntimeError("Invalid archive entry")
                 archive.extractall(root)
+            phase = "execution"
             child = subprocess.Popen([sys.executable, str(root / "worker.py")], cwd=root,
                                      env=env, stdout=log, stderr=log)
             last_publish = time.monotonic()
@@ -76,7 +80,7 @@ def main():
         except Exception:
             if store_verified:
                 publish()
-            print("Stopped. Check private configuration or details.", flush=True)
+            print(f"Stopped during {phase}. Check private configuration or details.", flush=True)
             return 1
 
 
