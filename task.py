@@ -26,17 +26,26 @@ def main():
     phase = "access"
     with logfile.open("wb", buffering=0) as log:
         def run(*args, capture=False, check=True):
-            return subprocess.run(args, env=env, stdout=subprocess.PIPE if capture else log,
-                                  stderr=log, check=check)
+            for attempt in range(3 if check else 1):
+                result = subprocess.run(args, env=env, stdout=subprocess.PIPE if capture else log,
+                                        stderr=log, check=False)
+                if not check or result.returncode == 0:
+                    return result
+                if attempt < 2:
+                    time.sleep(2 ** attempt)
+            result.check_returncode()
 
         def publish():
-            visibility = run("gh", "api", "repos/" + env["STORE"], "--jq", ".private", capture=True)
-            if visibility.stdout.strip() != b"true":
-                return
-            snapshot = root / "snapshot" / "details.txt"
-            snapshot.parent.mkdir(exist_ok=True)
-            shutil.copyfile(logfile, snapshot)
-            run("gh", "release", "upload", tag, str(snapshot), "--clobber", check=False)
+            try:
+                visibility = run("gh", "api", "repos/" + env["STORE"], "--jq", ".private", capture=True)
+                if visibility.stdout.strip() != b"true":
+                    return
+                snapshot = root / "snapshot" / "details.txt"
+                snapshot.parent.mkdir(exist_ok=True)
+                shutil.copyfile(logfile, snapshot)
+                run("gh", "release", "upload", tag, str(snapshot), "--clobber")
+            except Exception:
+                print("Private update deferred.", flush=True)
 
         try:
             result = run("gh", "api", "repos/" + env["STORE"], "--jq", ".private", capture=True)
@@ -80,6 +89,14 @@ def main():
         except Exception:
             if store_verified:
                 publish()
+            if phase == "access":
+                errors = logfile.read_text(errors="replace").lower()
+                if "http 401" in errors or "bad credentials" in errors:
+                    print("Access authentication failed.", flush=True)
+                    return 1
+                if "http 403" in errors:
+                    print("Access permission denied.", flush=True)
+                    return 1
             print(f"Stopped during {phase}. Check private configuration or details.", flush=True)
             return 1
 
